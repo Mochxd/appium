@@ -9,7 +9,7 @@ export const validators = {
     }
   },
   setNetworkConnection: (type: any) => {
-    if (!isNumber(type) || [0, 1, 2, 4, 6].indexOf(type) === -1) {
+    if (!isNumber(type) || ![0, 1, 2, 4, 6].includes(Number(type))) {
       throw new Error('Network type must be one of 0, 1, 2, 4, 6');
     }
   },

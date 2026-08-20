@@ -31,4 +31,17 @@ describe('validators', function () {
       }
     });
   });
+
+  describe('#setNetworkConnection', function () {
+    it('should accept string numeric network types', function () {
+      for (const type of ['0', '1', '2', '4', '6']) {
+        assert.doesNotThrow(() => validators.setNetworkConnection(type));
+      }
+    });
+
+    it('should reject invalid network types', function () {
+      assert.throws(() => validators.setNetworkConnection('7'), /Network type must be one of/);
+      assert.throws(() => validators.setNetworkConnection('abc'), /Network type must be one of/);
+    });
+  });
 });
