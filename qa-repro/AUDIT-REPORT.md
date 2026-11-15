@@ -7,12 +7,13 @@
 
 The fork `Mochxd/appium` master (`33459705e`, 2026-08-14) is 460 commits behind this commit. Every finding below was re-checked on `a8d646b6c`. Suspects that this commit already fixes are listed separately and are not counted as bugs.
 
-No product code was changed. Evidence is `qa-repro/reproduce-bugs.mjs`, which imports the compiled packages and prints `REPRODUCED` for each case (`7/7` on this commit).
+No product code was changed. Evidence is two scripts that import the compiled packages and print `REPRODUCED` for each case: `qa-repro/reproduce-bugs.mjs` (`7/7`) and `qa-repro/followup-repros.mjs` (`12/12`) on this commit.
 
 ```bash
 npm ci
 npx tsc -b
 node qa-repro/reproduce-bugs.mjs
+node qa-repro/followup-repros.mjs
 ```
 
 Upstream issue search (GitHub issues on `appium/appium`, plus issue `#18716`) did not find an open report that describes these defects. `#18716` is closed and is about `json-schema-to-typescript` emitting the wrong TypeScript type for `ipv6`, which is a different problem.
@@ -205,6 +206,216 @@ Input message: `{"id":7,"method":"session.status"}` (no `params`).
 **Fix direction:** close the quote the same way line 147 does.
 
 ---
+
+## Additional bugs confirmed on the same commit
+
+These were checked after the first pass. Each one is reproduced by `node qa-repro/followup-repros.mjs`.
+
+### 8. One bad `firstMatch` candidate rejects the whole new session
+
+| | |
+| --- | --- |
+| Severity | **High** |
+| Package | `@appium/base-driver` |
+| Location | `packages/base-driver/lib/basedriver/capabilities.ts:346-347` and `:51-58` |
+
+`CapabilityParser.parse` merges every candidate with `candidates.map((candidate) => mergeCaps(...))` before the `try/catch` in `matchCandidates`. `mergeCaps` throws when a name exists on both `alwaysMatch` and that candidate, including when the values are equal. WebDriver processing is supposed to drop that candidate and try the next one.
+
+**Input:**
+
+```json
+{
+  "alwaysMatch": {"platformName": "Android"},
+  "firstMatch": [
+    {"platformName": "Android", "appium:deviceName": "bad"},
+    {"appium:deviceName": "emu"}
+  ]
+}
+```
+
+**Expected:** the first candidate is skipped and the match is `platformName=Android`, `deviceName=emu`.  
+**Actual:** `invalid argument`: `property 'platformName' should not exist on both primary and secondary`.
+
+The same fail-fast happens in `validateValues` (`capabilities.ts:406-408`): a type error on candidate 0 throws before candidate 1 is considered.
+
+**Fix direction:** catch merge and validation errors per candidate, record them, and continue. Only fail the request when no candidate matches.
+
+### 9. `implicit: null` makes element search wait forever
+
+| | |
+| --- | --- |
+| Severity | **High** |
+| Package | `@appium/base-driver` |
+| Location | `packages/base-driver/lib/basedriver/helpers/timeouts.ts:36-40` and `packages/base-driver/lib/basedriver/commands/timeout.ts:104-105`, `:189-190` |
+
+`validateTimeoutValue` allows `null` for every timeout, including `implicit`. `setImplicitWait` stores that `null` (its comment says null disables the wait). `implicitWaitForCondition` then uses `this.implicitWaitMs ?? Infinity`, and `null ?? Infinity` is `Infinity`. Each poll also clears the new-command timer.
+
+**Input:** `POST /session/:id/timeouts` with `{"implicit": null}`, then find an element that is absent.  
+**Expected:** HTTP 400, or one immediate find. The WebDriver spec allows `null` only for `script` and `pageLoad`.  
+**Actual:** `implicitWaitMs` is `null` and the find wait is `Infinity`. The log line is `Set implicit wait to nullms`.
+
+**Fix direction:** reject `null` for `implicit`. For `script` and `pageLoad`, keep `null` as "no limit" without routing it through `?? Infinity` on the find path.
+
+### 10. `defaultsDeep` copies a JSON `__proto__` object onto `Object.prototype`
+
+| | |
+| --- | --- |
+| Severity | **High** |
+| Package | `appium` |
+| Location | `packages/appium/lib/utils/object.ts:291-299`, called from `packages/appium/lib/bootstrap/appium-initializer.ts:138-143` |
+
+`fillUndefinedDeep` reads `dest[key]`. For the key `__proto__` that read returns `Object.prototype`, which is not `undefined`, and `isPlainObject(Object.prototype)` is true, so the merge writes the attacker's fields onto `Object.prototype`. `setPath` already refuses `__proto__`. This function does not. Startup merges CLI args, the config file's `server` object, and schema defaults through `defaultsDeep`.
+
+**Input:** `defaultsDeep({}, JSON.parse('{"__proto__":{"relaxedSecurityEnabled":true}}'))`.  
+**Expected:** a normal object, `({}).relaxedSecurityEnabled` stays `undefined`.  
+**Actual:** `({}).relaxedSecurityEnabled === true` until `Object.prototype.relaxedSecurityEnabled` is deleted.
+
+**Fix direction:** skip `__proto__`, `constructor`, and `prototype` in `fillUndefinedDeep`, the same way `isSafePathKey` does for `setPath`. Copy with `Object.create(null)` or `Object.hasOwn`.
+
+### 11. `reqBasePath: "/"` doubles the proxied session path
+
+| | |
+| --- | --- |
+| Severity | **High** |
+| Package | `@appium/base-driver` |
+| Location | `packages/base-driver/lib/wd-proxy/proxy.ts:397-400` and `:129` |
+
+`"/"` is a prefix of every pathname. `pathname.replace("/", "")` removes only the first slash, so `/session/abc/url` becomes `session/abc/url`. The session matcher then fails and `getUrlForProxy` prepends another session. A `base` of `"/"` also inserts `//`.
+
+**Input:** `new WebDriverProxy({server:'127.0.0.1', port:9, reqBasePath:'/', base:'/', sessionId:'proxy-session'}).getUrlForProxy('/session/abc/url', 'GET')`.  
+**Expected:** `http://127.0.0.1:9/session/abc/url` (or the proxy session id substituted once).  
+**Actual:** `http://127.0.0.1:9//session/proxy-session/session/abc/url`.
+
+**Fix direction:** treat `reqBasePath` of `"/"` as empty, and strip a trailing slash from `base` before joining.
+
+### 12. Integer CLI values keep a numeric prefix
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `appium` |
+| Location | `packages/appium/lib/schema/cli-args.ts:132-138` |
+
+`parseInt` / `parseFloat` stop at the first non-digit, then the schema sees only that number. `--port 4723abc` is stored as `4723`. `--port 10e2` is `10`, not `1000`. `--request-timeout 0abc` is `0`, which disables the request timeout.
+
+**Expected:** reject the token.  
+**Actual:** `parseArgs(['--port','4723abc']).port === 4723`.
+
+**Fix direction:** accept the token only when the entire string is a canonical integer or number, then run the schema check.
+
+### 13. Inline `--log-filters` JSON is split on commas before `JSON.parse`
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `appium` |
+| Location | `packages/appium/lib/schema/cli-args.ts:154-158` |
+
+`log-filters` is an array whose transformer is `json`. Array arguments are CSV-split first, then each piece is parsed as JSON. A filter document contains commas, so the inline form never parses. A file path still works when the path itself has no comma.
+
+**Input:** `--log-filters '[{"text":"password","replacer":"***"}]'`.  
+**Expected:** one rule.  
+**Actual:** argparse error `invalid argTypeFunction value` after `parseCsvLine` yields `[{"text":"password"` and `"replacer":"***"}]`.
+
+**Fix direction:** when the transformer is `json`, parse the whole argv string (or a file) as one JSON value. Do not CSV-split it first.
+
+### 14. A feature name that matches a file replaces the insecure-feature list
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `appium` |
+| Location | `packages/appium/lib/schema/cli-transformers.ts:27-37` |
+
+`allow-insecure` and `deny-insecure` read a regular file before treating the token as a feature name. Directories are ignored. A file in the working directory is not.
+
+**Input:** a file named `adb_shell` whose contents are `*:adb_shell`, then `--allow-insecure adb_shell`.  
+**Expected:** the feature `adb_shell`.  
+**Actual:** the allow-list is `["*:adb_shell"]`.
+
+**Fix direction:** read a file only when the value looks like a path (`./`, `/`, or a trailing separator), or require an explicit flag. Do not let a cwd file shadow a feature name.
+
+### 15. Log-filter flag `y` is merged with the forced `g` and the secret stays in the line
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `@appium/logger` |
+| Location | `packages/logger/lib/secure-values-preprocessor.ts:32` and `:54-61` |
+
+`g` is always inserted. A user flag `y` is added as well, producing `gy`. A sticky global replace only matches at index 0, so a secret later in the line is left as-is.
+
+**Input:** `{text:'s3cr3t', flags:'y'}` against `prefix s3cr3t suffix`.  
+**Expected:** the secret is masked.  
+**Actual:** flags are `gy` and the output is unchanged.
+
+**Fix direction:** do not combine `y` with the forced `g`. Ignore `y`, or apply `y` only when the caller did not also need a global replace.
+
+### 16. A global copy filter drops every other matching path
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `@appium/support` |
+| Location | `packages/support/lib/fs.ts:118` |
+
+`toCpOptions` uses `filter.test(source)` when the filter is a `RegExp`. A `/g` or `/y` pattern advances `lastIndex`, so the next path is tested from the middle of the previous match.
+
+**Input:** `toCpOptions({filter: /keep/g}).filter` on `/tmp/keep-a`, `/tmp/keep-b`, `/tmp/keep-c`.  
+**Expected:** `true, true, true`.  
+**Actual:** `true, false, true`. `fs.copyFile` then omits every other matching file.
+
+**Fix direction:** clone the regexp or set `lastIndex = 0` before each `test`.
+
+### 17. `fs.mkdir` reports success when the path is already a file
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `@appium/support` |
+| Location | `packages/support/lib/fs.ts:188-195` |
+
+Any `EEXIST` is swallowed, including when a file occupies the path.
+
+**Input:** write `occupied`, then `fs.mkdir(occupied)`.  
+**Expected:** throw `EEXIST`.  
+**Actual:** the promise resolves and the path is still a file.
+
+**Fix direction:** on `EEXIST`, stat the path and rethrow unless it is a directory.
+
+### 18. Legacy `--webhook` host:port parsing breaks IPv6
+
+| | |
+| --- | --- |
+| Severity | **Medium** |
+| Package | `appium` |
+| Location | `packages/appium/lib/logsink.ts:184-187` |
+
+`http://[::1]:9003/logs` is handled by `URL.parse` above this branch. A bare `host:port` value is split on the first colon.
+
+**Input:** `parseWebhookUri('::1')` and `parseWebhookUri('[::1]:9003')`.  
+**Expected:** host `::1`, port `9003`.  
+**Actual:** `::1` becomes `{host:'127.0.0.1', port:9003}`. `[::1]:9003` becomes `{host:'[', port:9003}`.
+
+**Fix direction:** parse bracketed IPv6 before splitting, and do not fall back to `127.0.0.1` when the host token is empty.
+
+### 19. `escapeSpecialChars` compiles the extra escape character as a regexp
+
+| | |
+| --- | --- |
+| Severity | **Low** |
+| Package | `@appium/support` |
+| Location | `packages/support/lib/util.ts:201-202` |
+
+`new RegExp(quoteEscape, 'g')` and a `String.replace` replacement of `` `\\${quoteEscape}` `` both treat the argument as syntax.
+
+**Input:** `escapeSpecialChars('ab', '.')`.  
+**Expected:** `ab` with each character unchanged, or `\.` only if `.` itself is being escaped as a literal.  
+**Actual:** `'\\.\\.'` because `.` matches every character. `escapeSpecialChars('a', '(')` throws `Invalid regular expression`.
+
+**Fix direction:** escape with `split`/`join` or `replaceAll` on the literal character. Do not build a `RegExp`.
+
+Other leads from that pass were not re-run here, so they are not listed as confirmed: OpenCV `TM_SQDIFF` score polarity, template-match neighbor filtering, a screenshot slice resized to height 0, `initOpenCv` calling `removeAllListeners('unhandledRejection')`, Strongbox empty slugs, `fs.mv` dropping FIFOs, extension `package.json` fields overwriting install bookkeeping, `driver update` exiting 0, and in-process `Manifest.write` coalescing.
 
 ## Already fixed on this commit (dropped)
 
