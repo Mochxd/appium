@@ -1,0 +1,38 @@
+#1 ProxyRequest.cancel() leaves execute() pending; driver-level effect
+   raw ProxyRequest.execute() after cancel: pending; executeCommand('hang') after startUnexpectedShutdown (cancels proxy): rejected: The driver was unexpectedly shut down!; active before=1
+#2 Idempotency key reuse: different path runs, different body replays
+   1st={"n":1,"got":"a"} /other={"n":2,"other":true} 3rd(body browserName=different)={"n":1,"got":"a"} handlerCalls=2
+#3 Log filter replacer with $& / $1
+   '[$&]' -> "Authorization: Bearer [s3cret-token]"; documented '$1' truncation example -> "0123456789abcde"
+#4 New-session proxy: sessionId captured for /session?q and /session/
+   /session -> downstream /session, sessionId=down-1 | /session?trace=1 -> downstream /session?trace=1, sessionId=null | /session/ -> downstream /session, sessionId=null
+#5 Legacy {type:"command"} timeouts body reshaped for downstream
+   downstream body for command: {"command":60000}; for 'page load': {"pageLoad":100}
+#6 parseTimeoutArgument / command timeout accepts junk
+   "10abc"->10, "0x10"->0, 10.9->10, "1e3"->1; W3C command:'10abc' -> newCommandTimeoutMs=10; W3C implicit:'10abc' -> InvalidArgumentError
+#7 BiDi missing params message quote
+   params: "Missing params for BiDi operation in '{\"id\":7,\"method\":\"session.status\"}" | method: "Missing method for BiDi operation in '{\"id\":8,\"params\":{}}'"
+#8 firstMatch duplicate of alwaysMatch key fails the whole request
+   InvalidArgumentError: property 'platformName' should not exist on both primary ({"platformName":"Android"}) and 
+#9 implicit: null -> unbounded wait
+   accepted; implicitWaitMs=null; condition polled until true (n=3, result=true) i.e. no deadline
+#10 defaultsDeep with own __proto__ key
+   defaultsDeep -> ({}).relaxedSecurityEnabled=true (merged own keys: []); readConfigFile(server.__proto__) errors: ["must NOT have additional properties"]; config default-capabilities.__proto__ (accepted, errors=[]) + CLI --default-capabilities -> ({}).polluted=true
+#11 reqBasePath "/" doubles session path
+   base '/': http://127.0.0.1:9//session/proxy-session/session/abc/url | base default: http://127.0.0.1:9/session/proxy-session/session/abc/url
+#12 Integer/number CLI values keep a numeric prefix
+   --port 4723abc -> 4723, --port 10e2 -> 10, --port 47.9 -> 47, --keep-alive-timeout 0abc -> 0
+#13 Inline --log-filters JSON
+   inline -> ERROR repro.mjs server: error: argument --log-filters: invalid argTypeFunction value: '[{"text":"password","replacer":"***"}]' | single-key inline -> [{"text":"password"}] | file -> [{"text":"password","replacer":"***"}]
+#14 cwd file named like a feature replaces --allow-insecure value
+   transformer -> ["*:adb_shell"]; parser --allow-insecure adb_shell -> ["*:adb_shell"]
+#15 flags "y" combined with forced "g"
+   flags=gy; 'prefix s3cr3t suffix' -> "prefix s3cr3t suffix"; 's3cr3t at start' -> "**SECURE** at start"
+#16 toCpOptions with /g RegExp filter
+   filter results: [true,false,true]; single file copy ok
+#17 fs.mkdir on an existing regular file
+   mkdir(file) -> resolved, isFile=true; mkdir(file,{recursive:true}) -> resolved
+#18 Legacy --webhook host:port with IPv6
+   parseWebhookUri('::1')={"host":"127.0.0.1","port":9003,"path":"/","ssl":false}; parseWebhookUri('[::1]:9003')={"host":"[","port":9003,"path":"/","ssl":false}; CLI --webhook '[::1]:9003' -> ERROR repro.mjs server: error: argument --webhook/-G: ; CLI --webhook '::1' -> ERROR repro.mjs server: error: argument --webhook/-G: ; CLI --webhook localhost:9003 -> "localhost:9003"
+#19 escapeSpecialChars quoteEscape treated as regexp
+   ('ab','.') -> "\\.\\."; ("it's","'") -> "it\\'s"; ('a(','(') -> throws SyntaxError: Invalid regular expression: /(/g: Unterminated group

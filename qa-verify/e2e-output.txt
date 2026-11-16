@@ -1,0 +1,7 @@
+--- #12 --port 4723abc (expected: rejected; observed: listens on 4723)
+{"value":{"ready":true,"message":"The server is ready to accept new connections","build":{"version":"4.0.0","git-sha":"a8d646b6ccbe61335618bfdc039fd2050b7c9194","built":"2026-11-15 23:10:01 +0100"}}}
+[38;5;86m[HTTP][0m Appium REST http interface listener started on http://0.0.0.0:4723
+--- #18 --webhook '[::1]:9003' (rejected by format:uri before parseWebhookUri runs)
+index.js server: error: argument --webhook/-G: 
+--- #13 inline --log-filters with a comma
+index.js server: error: argument --log-filters: invalid argTypeFunction value: '[{"text":"password","replacer":"***"}]'
