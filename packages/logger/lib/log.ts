@@ -269,6 +269,11 @@ export class Log extends EventEmitter implements Logger {
     };
   }
 
+  /** Applies the loaded secure-value rules to `text`. */
+  redact(text: string): string {
+    return this._secureValuesPreprocessor.preprocess(text);
+  }
+
   private useColor(stream: Writable | null): boolean {
     // by default, decide based on tty-ness.
     return this._colorEnabled ?? Boolean(stream && 'isTTY' in stream && stream.isTTY);

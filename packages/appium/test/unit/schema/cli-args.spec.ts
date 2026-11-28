@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import path from 'node:path';
 import {describe, it, beforeEach, afterEach} from 'node:test';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import type {ExtensionType} from '@appium/types';
 import type {ArgumentOptions} from 'argparse';
 
 import {PLUGIN_TYPE} from '../../../lib/constants.js';
 import {log} from '../../../lib/logger.js';
-import {emitCliNumberCoercionWarnings, toParserArgs} from '../../../lib/schema/cli-args.js';
+import {
+  discardCliNumberCoercionWarnings,
+  emitCliNumberCoercionWarnings,
+  toParserArgs,
+} from '../../../lib/schema/cli-args.js';
 import {finalizeSchema, registerSchema, resetSchema} from '../../../lib/schema/index.js';
 
 type ParserArgSpec = ArgumentOptions & {
@@ -158,6 +165,26 @@ describe('cli-args', function () {
                 `The value '0x10' of --plugin-blob-foo was coerced to 0`,
               ],
             );
+          });
+
+          it('should redact a value before truncating the warning', async function (t) {
+            const warn = t.mock.method(log, 'warn');
+            const secret = 'private';
+            // 100 chars lands inside `private`, so a filter for that word misses the cut token
+            const value = `10-${'a'.repeat(92)}-${secret}`;
+            try {
+              assert.strictEqual(result['--plugin-blob-foo'].type!(value), 10);
+              await log.unwrap().loadSecureValuesPreprocessingRules([{text: secret}]);
+              emitCliNumberCoercionWarnings();
+              assert.strictEqual(warn.mock.callCount(), 1);
+              const message = String(warn.mock.calls[0].arguments[0]);
+              assert.ok(!message.includes('priv'));
+              assert.ok(message.includes('**S'));
+              assert.match(message, /was coerced to 10$/);
+            } finally {
+              discardCliNumberCoercionWarnings();
+              await log.unwrap().loadSecureValuesPreprocessingRules([]);
+            }
           });
 
           it('should contain a SCREAMING_SNAKE_CASE `metavar` prop', function () {
@@ -361,5 +388,34 @@ describe('cli-args', function () {
         });
       });
     });
+  });
+});
+
+describe('cli number warnings with _TESTING=1', function () {
+  it('should emit a coercion warning when the test logger is in use', function () {
+    const specDir = path.dirname(fileURLToPath(import.meta.url));
+    const libDir = path.resolve(specDir, '../../../lib');
+    const moduleUrl = (name: string) => JSON.stringify(pathToFileURL(path.join(libDir, name)).href);
+    // the mock logger is chosen when the module loads, so this needs a fresh process
+    const script = `
+      const {log} = await import(${moduleUrl('logger.js')});
+      const {getParser} = await import(${moduleUrl('cli/parser.js')});
+      const {emitCliNumberCoercionWarnings} = await import(${moduleUrl('schema/cli-args.js')});
+      if (log.unwrap().redact('4723abc') !== '4723abc') {
+        throw new Error('redact changed the token');
+      }
+      const parser = await getParser();
+      const parsed = parser.parseArgs(['--port', '4723abc']);
+      if (parsed.port !== 4723) {
+        throw new Error('port ' + parsed.port);
+      }
+      emitCliNumberCoercionWarnings();
+    `;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: path.resolve(specDir, '../../../..'),
+      env: {...process.env, _TESTING: '1', _FORCE_LOGS: '0'},
+      encoding: 'utf8',
+    });
+    assert.strictEqual(result.status, 0, result.stderr || result.stdout);
   });
 });

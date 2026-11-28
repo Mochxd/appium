@@ -80,23 +80,37 @@ function getSchemaValidator<Coerced>(
 }
 
 // argparse runs before the log file and filters exist, so the warning waits
-const pendingCliNumberWarnings: string[] = [];
+const pendingCliNumberWarnings: PendingCliNumberWarning[] = [];
+
+interface PendingCliNumberWarning {
+  value: string;
+  flag: string;
+  parsed: number;
+}
 
 // parseInt('4723abc') and parseFloat('7abc') drop the rest of the token without an error
 function parseCliNumber(value: string, parse: (value: string) => number, flag: string): number {
   const parsed = parse(value);
   if (!Number.isNaN(parsed) && Number(value) !== parsed) {
-    pendingCliNumberWarnings.push(
-      `The value '${util.truncateString(value, {length: 100})}' of ${flag} was coerced to ${parsed}`,
-    );
+    pendingCliNumberWarnings.push({value, flag, parsed});
   }
   return parsed;
 }
 
+/** Whether a number-coercion warning is waiting to be logged. */
+export function hasCliNumberCoercionWarnings(): boolean {
+  return pendingCliNumberWarnings.length > 0;
+}
+
+// redact first. a 100-char cut can split the text a filter is looking for
+function cliNumberValueForLog(value: string): string {
+  return util.truncateString(log.unwrap().redact(value), {length: 100});
+}
+
 /** Logs number-coercion warnings stored while arguments were parsed. */
 export function emitCliNumberCoercionWarnings(): void {
-  for (const message of pendingCliNumberWarnings.splice(0)) {
-    log.warn(message);
+  for (const {value, flag, parsed} of pendingCliNumberWarnings.splice(0)) {
+    log.warn(`The value '${cliNumberValueForLog(value)}' of ${flag} was coerced to ${parsed}`);
   }
 }
 

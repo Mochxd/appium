@@ -69,6 +69,9 @@ export interface Logger extends EventEmitter {
     rulesJsonPath: string | string[] | LogFiltersConfig,
   ): Promise<PreprocessingRulesLoadResult>;
 
+  /** Applies the loaded secure-value rules to `text`. */
+  redact(text: string): string;
+
   /** Forces ANSI color output on, regardless of the output stream's TTY-ness. */
   enableColor(): void;
   /** Forces ANSI color output off, regardless of the output stream's TTY-ness. */

@@ -11,11 +11,15 @@ interface GlobalWithNpmlog {
 
 const globalWithNpmlog = globalThis as typeof globalThis & GlobalWithNpmlog;
 const noop = () => {};
+const redact = (text: string) => text;
 
-// mock log object is used in testing mode to silence the output
+// mock log object is used in testing mode to silence the output.
+// getLogger().unwrap() is this object, and its unwrap() is the inner one.
 const MOCK_LOG = {
+  redact,
   unwrap: () => ({
     loadSecureValuesPreprocessingRules: () => Promise.resolve({issues: [], rules: []}),
+    redact,
     level: 'verbose',
     prefix: '',
     log: noop,

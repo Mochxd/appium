@@ -26,7 +26,11 @@ import {
   isServerCommandArgs,
   isSetupCommandArgs,
 } from '../schema/cli-args-guards.js';
-import {discardCliNumberCoercionWarnings, emitCliNumberCoercionWarnings} from '../schema/cli-args.js';
+import {
+  discardCliNumberCoercionWarnings,
+  emitCliNumberCoercionWarnings,
+  hasCliNumberCoercionWarnings,
+} from '../schema/cli-args.js';
 import {getDefaultsForSchema} from '../schema/schema.js';
 import {defaultsDeep, resolveAppiumHome} from '../utils/index.js';
 import {readConfigFile} from './config-file.js';
@@ -161,7 +165,10 @@ export class AppiumInitializer {
     if (preConfigArgs.showConfig) {
       showConfig(getNonDefaultServerArgs(preConfigArgs as Args), configResult, defaults, serverArgs);
       this.printValidationSummaries(driverConfig, pluginConfig);
-      await this.applyLogFilters(serverArgs);
+      // filters throw on a bad rule, so only load them when a warning needs redacting
+      if (hasCliNumberCoercionWarnings()) {
+        await this.applyLogFilters(serverArgs);
+      }
       emitCliNumberCoercionWarnings();
       return {} as InitResult<Cmd>;
     }
@@ -173,7 +180,10 @@ export class AppiumInitializer {
         appiumHome,
       });
       this.printValidationSummaries(driverConfig, pluginConfig);
-      await this.applyLogFilters(serverArgs);
+      // filters throw on a bad rule, so only load them when a warning needs redacting
+      if (hasCliNumberCoercionWarnings()) {
+        await this.applyLogFilters(serverArgs);
+      }
       emitCliNumberCoercionWarnings();
       return {} as InitResult<Cmd>;
     }
