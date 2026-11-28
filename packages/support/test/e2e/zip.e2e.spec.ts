@@ -1203,6 +1203,44 @@ describe('#zip', function () {
       assert.strictEqual(await fs.readlink(path.resolve(tmpRoot, 'out', 'a', 'link')), 'b/c.txt');
     });
 
+    it('should store an absolute symlink relative to the link', {skip: isWindows()}, async function () {
+      await fs.symlink(path.resolve(src, 'a', 'b', 'c.txt'), path.resolve(src, 'a', 'abs-link'));
+      const dstPath = path.resolve(tmpRoot, 'abs-link.zip');
+      await fs.writeFile(dstPath, await zip.toInMemoryZip(src));
+      await zip.extractAllTo(dstPath, path.resolve(tmpRoot, 'abs-out'));
+      assert.strictEqual(await fs.readlink(path.resolve(tmpRoot, 'abs-out', 'a', 'abs-link')), 'b/c.txt');
+    });
+
+    it('should keep a relative symlink that steps through another link', {skip: isWindows()}, async function () {
+      await fs.mkdirp(path.resolve(src, 'real', 'nested'));
+      await fs.mkdirp(path.resolve(src, 'other'));
+      await fs.writeFile(path.resolve(src, 'real', 'target.txt'), 'through-link');
+      await fs.writeFile(path.resolve(src, 'other', 'target.txt'), 'lexical');
+      await fs.symlink('../real/nested', path.resolve(src, 'other', 'via'));
+      await fs.symlink('via/../target.txt', path.resolve(src, 'other', 'link'));
+      const dstPath = path.resolve(tmpRoot, 'rel-link.zip');
+      await fs.writeFile(dstPath, await zip.toInMemoryZip(src));
+      await zip.extractAllTo(dstPath, path.resolve(tmpRoot, 'rel-out'));
+      const extracted = path.resolve(tmpRoot, 'rel-out', 'other', 'link');
+      assert.strictEqual(await fs.readlink(extracted), 'via/../target.txt');
+      assert.strictEqual(await fs.readFile(extracted, 'utf8'), 'through-link');
+    });
+
+    it('should keep an absolute symlink that steps through another link', {skip: isWindows()}, async function () {
+      await fs.mkdirp(path.resolve(src, 'real', 'nested'));
+      await fs.mkdirp(path.resolve(src, 'other'));
+      await fs.writeFile(path.resolve(src, 'real', 'target.txt'), 'through-link');
+      await fs.writeFile(path.resolve(src, 'other', 'target.txt'), 'lexical');
+      await fs.symlink('../real/nested', path.resolve(src, 'other', 'via'));
+      await fs.symlink(`${path.resolve(src, 'other')}/via/../target.txt`, path.resolve(src, 'other', 'abs-via'));
+      const dstPath = path.resolve(tmpRoot, 'abs-via.zip');
+      await fs.writeFile(dstPath, await zip.toInMemoryZip(src));
+      await zip.extractAllTo(dstPath, path.resolve(tmpRoot, 'abs-via-out'));
+      const extracted = path.resolve(tmpRoot, 'abs-via-out', 'other', 'abs-via');
+      assert.strictEqual(await fs.readlink(extracted), 'via/../target.txt');
+      assert.strictEqual(await fs.readFile(extracted, 'utf8'), 'through-link');
+    });
+
     it('toArchive should match folder entries with folder globs and skip the destination archive', async function () {
       const dstPath = path.resolve(src, 'self.zip');
       await zip.toArchive(dstPath, {cwd: src, ignore: ['**/b', 'empty']});

@@ -47,6 +47,35 @@ function toMode(stats: Stats): number {
   return isWindows() && stats.isDirectory() ? 0o40755 : stats.mode & 0xffff;
 }
 
+function relativeSymlinkTarget(absPath: string, linkPath: string, logicalRoot: string, realRoot: string): string {
+  // '..' is applied after a link is followed, so a relative target has to be stored as written
+  if (!path.isAbsolute(linkPath)) {
+    return linkPath;
+  }
+  const dirName = path.dirname(absPath);
+  let target = linkPath;
+  // The walk uses the real source path, while an absolute link may still use the unresolved one
+  if (logicalRoot !== realRoot && (target === logicalRoot || target.startsWith(`${logicalRoot}${path.sep}`))) {
+    target = `${realRoot}${target.slice(logicalRoot.length)}`;
+  }
+  return relativeKeepingParentSegments(dirName, target);
+}
+
+// path.relative drops '..' before a symlink is followed
+function relativeKeepingParentSegments(from: string, to: string): string {
+  if (path.parse(from).root !== path.parse(to).root) {
+    return path.relative(from, to).split(path.sep).join('/');
+  }
+  const fromParts = from.split(path.sep).filter((part) => part.length > 0);
+  const toParts = to.split(path.sep).filter((part) => part.length > 0);
+  let shared = 0;
+  while (shared < fromParts.length && shared < toParts.length && fromParts[shared] === toParts[shared]) {
+    shared++;
+  }
+  const parts = [...Array(fromParts.length - shared).fill('..'), ...toParts.slice(shared)];
+  return parts.join('/') || '.';
+}
+
 async function addEntry(
   zip: ZipFile,
   output: Readable,
@@ -54,6 +83,8 @@ async function addEntry(
   name: string,
   stats: Stats,
   level: number,
+  logicalRoot: string,
+  realRoot: string,
 ): Promise<void> {
   const common = {
     mtime: stats.mtime,
@@ -64,7 +95,9 @@ async function addEntry(
   if (stats.isDirectory()) {
     zip.addEmptyDirectory(name, common);
   } else if (stats.isSymbolicLink()) {
-    zip.addBuffer(Buffer.from(await readlink(absPath)), name, {...common, compress: false});
+    // The extractor rejects an absolute target, so the link is stored relative to itself
+    const target = relativeSymlinkTarget(absPath, await readlink(absPath), logicalRoot, realRoot);
+    zip.addBuffer(Buffer.from(target), name, {...common, compress: false});
   } else if (stats.isFile()) {
     // Lazy, so only one file is open at a time (yazl API is callback-based)
     /* oxlint-disable promise/prefer-await-to-callbacks */
@@ -87,7 +120,7 @@ async function populate(zip: ZipFile, output: Readable, srcPath: string, opts: Z
   const resolved = path.resolve(srcPath);
   // The root is followed if it is a symlink, while the entries below it are not
   if (!(await stat(resolved)).isDirectory()) {
-    await addEntry(zip, output, resolved, path.basename(resolved), await lstat(resolved), level);
+    await addEntry(zip, output, resolved, path.basename(resolved), await lstat(resolved), level, resolved, resolved);
     zip.end();
     return;
   }
@@ -112,7 +145,7 @@ async function populate(zip: ZipFile, output: Readable, srcPath: string, opts: Z
     const name = path.relative(root, absPath).split(path.sep).join('/');
     const isDir = stats.isDirectory();
     if (matches(isIncluded, name, isDir) && !matches(isIgnored, name, isDir)) {
-      await addEntry(zip, output, absPath, name, stats, level);
+      await addEntry(zip, output, absPath, name, stats, level, resolved, root);
     }
   }
   zip.end();
